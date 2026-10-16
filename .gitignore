@@ -1,0 +1,14 @@
+# ambiente e caches
+.venv/
+__pycache__/
+*.pyc
+app/streamlit.log
+
+# dados brutos do INEP (~12 GB): ficam só na sua máquina
+microdados_enem_*/
+COMPETENCIAS_REDACAO_*/
+competencias_redacao_enem_*/
+*.csv
+
+# sistema
+.DS_Store

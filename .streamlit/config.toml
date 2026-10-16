@@ -1,0 +1,15 @@
+[theme]
+primaryColor = "#2a78d6"
+font = "sans serif"
+
+[server]
+runOnSave = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[global]
+disableWidgetStateDuplicationWarning = true
