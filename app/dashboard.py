@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import statsmodels.api as sm
 import streamlit as st
 
 import lib
@@ -128,7 +129,7 @@ def _reset():
     st.session_state["f_uf"] = []
 
 
-_KEEP_KEYS = ['anos_dor', 'esc_lista', 'esc_min', 'ex20', 'excl_tr', 'f_ano', 'f_reg', 'f_uf', 'map_geral', 'map_merc', 'mp_ano', 'mp_min', 'mp_nivel', 'mp_quad', 'mp_rede', 'mp_visao', 'mun_ano', 'mun_busca', 'mun_min', 'mun_minp', 'pp_ano', 'pp_det', 'pp_hist', 'renda_min', 'serie_grupo', 'serie_modo', 'serie_ufs', 'sim_anos', 'sim_cac', 'sim_conv', 'sim_g', 'sim_margem', 'sim_meses', 'sim_ticket', 'so_net', 'p1', 'p2', 'p3', 'p4', 'p5', 'serie_met_Mercado', 'serie_met_Desempenho', 'serie_met_Perfil']
+_KEEP_KEYS = ['pp_sc_zero', 'pp_sc_ano', 'pp_sc_x', 'pp_sc_y', 'pp_sc_min', 'anos_dor', 'esc_lista', 'esc_min', 'ex20', 'excl_tr', 'f_ano', 'f_reg', 'f_uf', 'map_geral', 'map_merc', 'mp_ano', 'mp_min', 'mp_nivel', 'mp_quad', 'mp_rede', 'mp_visao', 'mun_ano', 'mun_busca', 'mun_min', 'mun_minp', 'pp_ano', 'pp_det', 'pp_hist', 'renda_min', 'serie_grupo', 'serie_modo', 'serie_ufs', 'sim_anos', 'sim_cac', 'sim_conv', 'sim_g', 'sim_margem', 'sim_meses', 'sim_ticket', 'so_net', 'p1', 'p2', 'p3', 'p4', 'p5', 'serie_met_Mercado', 'serie_met_Desempenho', 'serie_met_Perfil']
 # Streamlit descarta o estado de widgets que não foram renderizados na execução; como só a aba aberta roda,
 # reatribuímos os valores para preservar os filtros ao trocar de aba.
 for _k in _KEEP_KEYS:
@@ -929,6 +930,93 @@ with tabs[6]:
                     "Controlando renda e escolaridade dos pais, a escola privada ainda se associa a cerca de +40 pontos (aba Possibilidades). "
                     "Em 2024 a base pública inclui muito mais candidatos vinculados ao Censo, o que muda a composição.</div>", unsafe_allow_html=True)
 
+
+
+        section("Dispersão: alunos e escolas")
+        st.caption("Cada ponto é um aluno (amostra individual 2020-2023, presentes nas 4 provas e na redação) ou uma escola (médias de 2024, com mínimo de presentes). "
+                   "As retas são ajustes lineares por rede (statsmodels; nas escolas ponderados pelo nº de presentes).")
+        AREAS_SC = {"MT": "Matemática", "CN": "Ciências da Natureza", "CH": "Ciências Humanas", "LC": "Linguagens", "RED": "Redação", "GERAL": "Média geral"}
+        smp0 = load("amostra_regressao")
+        anos_smp = sorted(int(a_) for a_ in smp0.ano.unique())
+        c = st.columns([1.3, 1.5, 1.5, 1.2, 1.1])
+        sc_ano = c[0].segmented_control("Ano (alunos)", anos_smp, default=anos_smp[-1], key="pp_sc_ano", required=True)
+        xk = c[1].selectbox("Eixo X", list(AREAS_SC), index=0, format_func=AREAS_SC.get, key="pp_sc_x")
+        yk = c[2].selectbox("Eixo Y", list(AREAS_SC), index=4, format_func=AREAS_SC.get, key="pp_sc_y")
+        sc_min = c[3].slider("Mín. presentes/escola", 10, 80, 20, 5, key="pp_sc_min")
+        sc_zero = c[4].toggle("Incluir notas zero", False, key="pp_sc_zero", help="Zero = prova anulada/eliminada ou redação zerada. Por padrão ficam fora do gráfico e do ajuste.")
+
+
+        def _fit(x, y, w=None):
+            X = sm.add_constant(np.asarray(x, float))
+            m_ = (sm.WLS(np.asarray(y, float), X, weights=w) if w is not None else sm.OLS(np.asarray(y, float), X)).fit()
+            return m_.params[0], m_.params[1], m_.rsquared
+
+
+        def _scatter(df, xcol, ycol, hover, size=None, wcol=None, cap=6000):
+            fig = go.Figure()
+            stats = {}
+            rng_ = np.random.default_rng(0)
+            for rd, col_ in (("Pública", C1), ("Privada", C2)):
+                d = df[df.rede == rd]
+                if len(d) < 5:
+                    continue
+                a_, b_, r2 = _fit(d[xcol], d[ycol], d[wcol] if wcol else None)
+                stats[rd] = (b_, np.sqrt(r2), len(d))
+                v = d.sample(min(len(d), cap), random_state=1).copy()
+                for ax_, k_ in ((xcol, xk), (ycol, yk)):  # redação vem em degraus de 20: jitter só na exibição
+                    if k_ == "RED" and (v[ax_] % 20 == 0).mean() > .9:
+                        v[ax_] = v[ax_] + rng_.uniform(-9, 9, len(v))
+                fig.add_trace(go.Scattergl(x=v[xcol], y=v[ycol], mode="markers", name=f"{rd} ({len(d):,})".replace(",", "."),
+                                           marker=dict(color=col_, opacity=.35, size=(np.clip(np.sqrt(v[size]) * 0.8, 3, 13) if size else 4)),
+                                           customdata=v[hover].to_numpy(),
+                                           hovertemplate="%{customdata[0]}<br>X: %{x:.0f} · Y: %{y:.0f}<extra>" + rd + "</extra>"))
+                xs = np.array([d[xcol].quantile(.01), d[xcol].quantile(.99)])
+                # retas em WebGL (mesma camada dos pontos) e com contorno branco para aparecerem sobre a nuvem
+                fig.add_trace(go.Scattergl(x=xs, y=a_ + b_ * xs, mode="lines", line=dict(color="#ffffff", width=7), showlegend=False, hoverinfo="skip"))
+                fig.add_trace(go.Scattergl(x=xs, y=a_ + b_ * xs, mode="lines", line=dict(color=col_, width=4), showlegend=False, hoverinfo="skip"))
+            lo = float(min(df[xcol].quantile(.005), df[ycol].quantile(.005))); hi = float(max(df[xcol].quantile(.995), df[ycol].quantile(.995)))
+            fig.add_trace(go.Scatter(x=[lo, hi], y=[lo, hi], mode="lines", line=dict(color="rgba(128,128,128,.6)", dash="dot", width=1.5), name="X = Y", hoverinfo="skip"))
+            fig.update_xaxes(title=AREAS_SC[xk]); fig.update_yaxes(title=AREAS_SC[yk])
+            return fig, stats
+
+
+        def _txt(stats):
+            return " · ".join(f"<b>{k_}</b>: r = {dec(v_[1])}, +100 pts em X → {v_[0] * 100:+.0f} pts em Y" for k_, v_ in stats.items())
+
+
+        if xk == yk:
+            st.info("Escolha áreas diferentes nos eixos X e Y.")
+        else:
+            a, b = st.columns(2)
+            with a:
+                sm_ = smp0[(smp0.ano == sc_ano) & smp0.uf.isin(ufs)].copy()
+                sm_["rede"] = np.select([sm_.dep == "Privada", sm_.dep.isin(["Federal", "Estadual", "Municipal"]), sm_.escola_auto == "Privada", sm_.escola_auto == "Pública"],
+                                        ["Privada", "Pública", "Privada", "Pública"], default="")
+                sm_ = sm_[sm_.rede != ""].dropna(subset=["n_" + xk, "n_" + yk])
+                sm_["x"], sm_["y"] = sm_["n_" + xk], sm_["n_" + yk]
+                sm_["info"] = sm_.uf + " · " + sm_.sexo
+                if not sc_zero:
+                    sm_ = sm_[(sm_.x > 0) & (sm_.y > 0)]
+                if len(sm_) > 50:
+                    fig, stt = _scatter(sm_, "x", "y", ["info"])
+                    chart(fig, f"Alunos · {AREAS_SC[xk]} × {AREAS_SC[yk]} · {sc_ano}", f"{len(sm_):,} alunos da amostra (até 6 mil pontos por rede no gráfico)".replace(",", "."),
+                          h=500, insight=_txt(stt))
+                else:
+                    st.warning("Poucos alunos no recorte atual.")
+            with b:
+                ee = load("escolas_2024")
+                ee = ee[(ee.n >= sc_min) & ee.uf.isin(ufs) & (ee.dep != "n/d")].copy()
+                ee["rede"] = np.where(ee.dep == "Privada", "Privada", "Pública")
+                mp_ = {"RED": "REDACAO"}
+                ee["x"] = ee["s_" + mp_.get(xk, xk)] / ee.n
+                ee["y"] = ee["s_" + mp_.get(yk, yk)] / ee.n
+                ee["info"] = ee.mun + " · " + ee.uf + " · " + ee.dep + " · " + ee.n.astype(int).astype(str) + " presentes"
+                if len(ee) > 30:
+                    fig, stt = _scatter(ee, "x", "y", ["info"], size="n", wcol="n", cap=7000)
+                    chart(fig, f"Escolas · {AREAS_SC[xk]} × {AREAS_SC[yk]} · 2024", f"{len(ee):,} escolas; o tamanho do ponto cresce com o nº de presentes".replace(",", "."),
+                          h=500, insight=_txt(stt))
+                else:
+                    st.warning("Poucas escolas no recorte atual.")
 
 # ============================================================ MUNICÍPIOS
 with tabs[7]:
